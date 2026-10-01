@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# 测试与覆盖率产物
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 本地跑出来的演示输出（不是源码）
+out_*.csv
+out_*.log

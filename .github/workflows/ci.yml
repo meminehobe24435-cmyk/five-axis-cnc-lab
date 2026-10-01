@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: unit test (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.9', '3.12']
+
+    # ⚠️ 必须显式指定编码：windows-latest 上 Python 的 stdout 默认是 cp1252，
+    # 而本项目的演示与测试输出全是中文，会直接 UnicodeEncodeError 挂掉，
+    # 而且报错长得像测试失败（Ran N tests ... FAILED），极易误判成逻辑问题。
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 语法检查（编译全部源文件）
+        run: python -m compileall -q fiveaxis tests
+
+      - name: 单元测试
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: 跑全部演示（确认 CLI 可用）
+        run: python -m fiveaxis all
+
+      - name: 自检 —— 已知误差必须能被反推出来
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          from fiveaxis import metrology as met
+
+          # 循圆测试：注入已知误差，反推值必须对得上
+          cases = [
+              (dict(backlash_um=20.0),  'backlash',   20.0),
+              (dict(ovality_um=15.0),   'ovality',    15.0),
+              (dict(squareness_um=12.0),'squareness', 12.0),
+          ]
+          bad = []
+          for kw, field, expect in cases:
+              xs, ys, _ = met.simulate_circular_test(points=720, nominal_r=100.0, **kw)
+              r = met.circular_test(xs, ys, 100.0, center=(0.0, 0.0))
+              got = r[field] * 1000.0
+              ok = abs(got - expect) <= max(1.0, expect * 0.05)
+              print('%-14s 注入 %6.2f μm -> 反推 %6.2f μm  %s'
+                    % (field, expect, got, 'OK' if ok else 'FAIL'))
+              if not ok:
+                  bad.append(field)
+
+          # 运动学：正解→逆解→正解 往返误差必须是机器精度量级
+          import math
+          from fiveaxis import kinematics as kin
+          worst = 0.0
+          for ad in (3.0, 17.0, 45.0, 88.0, 119.0):
+              for cd in (0.0, 33.0, 120.0, 275.0):
+                  k = kin.forward_a(math.radians(ad), math.radians(cd))
+                  a2, c2 = kin.inverse_a(k)
+                  k2 = kin.forward_a(a2, c2)
+                  worst = max(worst, max(abs(k[i] - k2[i]) for i in range(3)))
+          print('正解→逆解→正解 最大往返偏差 %.3e' % worst)
+          if worst > 1e-12:
+              bad.append('kinematics round-trip')
+
+          if bad:
+              print('FAILED:', bad)
+              sys.exit(1)
+          print('全部自检通过')
+          PY
